@@ -1,0 +1,6 @@
+{
+  "name": "JA4 TLS Threat Detection IDS",
+  "description": "Intrusion Detection System for TLS traffic using JA4 fingerprinting, real-time alerting to a Telegram Bot, and custom Python script generation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

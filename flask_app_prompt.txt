@@ -1,0 +1,259 @@
+# PROMPT: Build a Python Flask version of JA4 TLS Threat Detection IDS (Intrusion Detection System)
+
+### ⚠️ CRITICAL MANDATE: NEVER USE TYPESCRIPT
+**You are strictly forbidden from using TypeScript (TS / TSX / Vite config) anywhere in this project. The frontend must be implemented exclusively in pure, clean Vanilla JavaScript, and the backend must be built using Python and Flask. Any styling should be done using Tailwind CSS utility classes directly loaded in the main HTML template.**
+
+You are tasked with building a complete, production-ready, full-stack security dashboard called **JA4 TLS Threat Detection IDS** using **Python Flask**, a local **SQLite database**, and raw **HTML, Tailwind CSS, and Vanilla JavaScript** on the frontend. 
+
+No Gemini API is used for signature matching; instead, all JA4 handshake fingerprints are compared against a local SQLite signature database, with full CRUD (Create, Read, Update, Delete) UI capabilities to register, update, and manage threat profiles.
+
+---
+
+## 1. PROJECT OVERVIEW
+The application is a web-based **Cyber Security Operations Center (SOC) Console** that monitors TLS Client Hello handshakes, decodes TLS handshakes into the state-of-the-art **JA4 Fingerprint format** (Segment A, Segment B, Segment C), matches them against a local database of known signatures, triggers real-time Telegram Bot alerts, and generates custom Python network-sniffing scripts for standalone deployment on target machines.
+
+### Core Key Features:
+1. **Interactive SOC Dashboard**: A dark-themed, sleek user interface featuring a live pipeline of network ingress, dynamic status indicators, and beautiful negative-space typography.
+2. **Local Signature Management Database**: A fully managed local database where administrators can add new JA4 fingerprints, tag them with custom risk levels (Safe, Warning, Critical), and specify associated tools/malware names (e.g., Cobalt Strike, Tor Browser, Metasploit, standard browser).
+3. **Deep Packet Handshake Inspector**: Breaks down any highlighted packet into its constituent JA4 components:
+   - **Segment A**: Transport metadata (protocol type, TLS version, destination port, ciphers/extensions counts, ALPN indicator).
+   - **Segment B**: Hexadecimal representation of sorted active cipher suites, hashed and truncated to 12 characters.
+   - **Segment C**: Hexadecimal representation of sorted active extensions, hashed and truncated to 12 characters.
+4. **Telegram Alerting Engine**: Ties the detection pipeline directly to Telegram channels. Real-time threat alerts are posted dynamically to the configured Telegram bot.
+5. **Interactive JA4 Signature Sandbox**: An educational playground where users can input custom TLS protocols, ALPN strings, hex ciphers, and hex extensions to dynamically compute a JA4 signature on-screen and check it against database definitions.
+6. **Autoconfigured Python Exporter**: Dynamically bundles and configures a standalone python script (`ja4_ids.py`) pre-injected with the active Telegram credentials that can be downloaded to run live sniffing on production servers using `Scapy`.
+
+---
+
+## 2. BACKEND SPECIFICATIONS (PYTHON & FLASK)
+
+### A. Database Schema (SQLite)
+Use SQLAlchemy or direct `sqlite3` to persist data in a file named `database.db`. Define the following tables:
+
+1. **`signatures`** (Known JA4 Fingerprints)
+   - `id` (Integer, Primary Key)
+   - `ja4` (String, unique, e.g., `t13d1516_8da0_94ef`)
+   - `threat_name` (String, e.g., `Cobalt Strike C2 Beacon`)
+   - `risk_level` (String: `Safe`, `Warning`, `Critical`)
+   - `description` (Text, describing the TLS client or threat pattern)
+   - `created_at` (DateTime, default current time)
+
+2. **`config`** (System parameters, e.g., Telegram connection settings)
+   - `key` (String, Primary Key, e.g., `telegram_bot_token`, `telegram_chat_id`)
+   - `value` (Text)
+
+3. **`packets_log`** (Captured and simulated event history)
+   - `id` (Integer, Primary Key)
+   - `timestamp` (DateTime)
+   - `src_ip` (String)
+   - `src_port` (Integer)
+   - `dst_ip` (String)
+   - `dst_port` (Integer)
+   - `sni` (String)
+   - `ja4` (String)
+   - `tool_match` (String)
+   - `risk_level` (String)
+   - `details_json` (Text / JSON string of decoded components: protocol, tlsVersion, alpn, ciphersCount, extensionsCount, ciphersList, extensionsList)
+
+4. **`alert_logs`** (Dispatched alerts)
+   - `id` (Integer, Primary Key)
+   - `timestamp` (DateTime)
+   - `threat_name` (String)
+   - `ja4` (String)
+   - `status` (String: `success`, `failed`)
+   - `message` (Text)
+
+---
+
+### B. Python Flask Endpoints
+
+1. **Static and Main Views**
+   - `GET /` - Main dashboard HTML interface.
+   - `GET /signatures_page` - Web UI page to manage, edit, delete, and add new signatures.
+
+2. **Database Signatures API (Full CRUD)**
+   - `GET /api/signatures` - Returns list of all JA4 signatures in the database as JSON.
+   - `POST /api/signatures` - Adds a new signature. Inputs: `ja4` (must validate format), `threat_name`, `risk_level`, `description`.
+   - `PUT /api/signatures/<int:id>` - Updates an existing signature.
+   - `DELETE /api/signatures/<int:id>` - Deletes a signature.
+
+3. **Telegram Alerting Setup**
+   - `GET /api/config` - Fetches the active Telegram Bot Token and Chat ID.
+   - `POST /api/config` - Updates the active Telegram Bot Token and Chat ID.
+   - `POST /api/test-alert` - Dispatches a test markdown message directly to the saved Telegram channel and records the event in `alert_logs`.
+
+4. **Network Event Simulation**
+   - `POST /api/simulate` - Receives custom packet definitions or triggers preset traffic simulation (e.g., Cobalt Strike, Tor Browser, or Standard browser traffic). Generates raw timestamp, source IP/ports, computes the matched signature from the database, sends Telegram messages for `Critical` and `Warning` threats, and inserts the record into `packets_log`.
+   - `GET /api/packets` - Returns the list of last 50 processed packets.
+
+5. **Local Python Script Generator**
+   - `GET /api/download/script` - Compiles a complete, standalone Python packet sniffer script (`ja4_ids.py`) preconfigured with the active database credentials (e.g., Telegram Token/Chat ID).
+
+---
+
+## 3. SIGNATURE MATCHING LOGIC (NO GEMINI API)
+When a raw packet is processed (either through live local sniffing or UI simulation):
+1. Parse the TLS Handshake payload to extract JA4-related parameters.
+2. Formulate the formatted JA4 string: `[Segment A]_[Segment B]_[Segment C]`.
+3. Query the local SQLite database for a match on the `ja4` string.
+4. **Matched Result**:
+   - If a record is found, associate the packet with the registered `threat_name`, `risk_level`, and `description`.
+   - If the threat matches `Warning` or `Critical` status, trigger the Telegram Bot alerting routine dynamically.
+5. **Unmatched Result**:
+   - If no database match is found, classify the packet with `Safe` status, marking the app match as "Unknown client" or "Unregistered Host Fingerprint".
+   - The UI should provide a button next to unrecognized captures in the pipeline: **"Add to Database Signatures"**, pre-filling the registration form with the capture's JA4 string, and allowing instant classification.
+
+---
+
+## 4. FRONTEND REQUIREMENTS (TAILWIND CSS & JAVASCRIPT)
+
+### Visual Style Guide:
+- **Theme**: Dark, cybernetic SOC operations styling. Background: `bg-zinc-950`, container cards: `bg-zinc-900/50` with high-quality borders (`border-zinc-800`).
+- **Accent Colors**: Emerald Green (`text-emerald-500`, `bg-emerald-500/10`) for safe traffic, Amber (`text-amber-500`) for warnings, and Rose/Crimson Red (`text-rose-500`) for critical threat signatures.
+- **Typography**: Clean Sans-Serif font (Inter/system-ui) for general labels, paired with high-readability monospace font (JetBrains Mono / Fira Code) for hex displays and JA4 fingerprints.
+
+### Interactive Components:
+1. **Dynamic Real-Time Ticker**: Shows ingress packets. Updates automatically (polling every 2-3 seconds, or using WebSockets/Server-Sent Events). Features action buttons to simulate CS Beacons, Tor browsers, or to add unknown logs directly to the database.
+2. **Deep Decoder Handshake Board**: Selects a packet from the feed to break down TLS metadata into dynamic visuals. Displays detailed cipher list arrays and extension arrays sorted alphabetically.
+3. **Telegram Setup Portal**: Inputs Token & Chat IDs, fires direct HTTP fetch triggers for immediate validation alerts, and logs active history states on a scrolling feed.
+4. **Signature Rule Admin Portal**: Elegant, fully functional grid with search filtering. Features inputs to add custom fingerprints, modify threat parameters, and delete outdated entries with a single click.
+5. **Interactive JA4 Sandbox**:
+   - Users can select TCP or QUIC, TLS 1.3/1.2/1.1, Default or Custom Ports, and input standard values like ALPN (e.g., `h2`), raw list of sorted cipher suites, and raw list of sorted extensions.
+   - The UI immediately runs local JavaScript functions to compute the exact JA4 string dynamically:
+     - Calculates Segment A (e.g., `t13d1516`) based on the selections.
+     - Performs SHA-256 hashing on sorted inputs for Segment B and Segment C, outputting the exact truncated 12-character hashes.
+     - Compares the resulting interactive string against the Flask database signatures via API and provides instantaneous match results (e.g., "Matched known rule: Cobalt Strike C2").
+
+---
+
+## 5. STANDALONE PYTHON AGENT BLUEPRINT (`ja4_ids.py`)
+
+The exporter must dynamically generate a Python script with Scapy structure. The generated code must look clean and run flawlessly:
+
+```python
+import sys
+import hashlib
+import json
+import urllib.request
+import urllib.parse
+from datetime import datetime
+
+try:
+    from scapy.all import sniff, TCP, IP, Raw
+except ImportError:
+    print("[-] Error: Scapy is required to capture network frames. Run 'pip install scapy'")
+    sys.exit(1)
+
+# Dynanically configured by Flask app exporter
+TELEGRAM_BOT_TOKEN = "{{ bot_token }}"
+TELEGRAM_CHAT_ID = "{{ chat_id }}"
+FLASK_SERVER_URL = "{{ server_url }}"
+
+# Known signature cache or remote match route
+KNOWN_SIGNATURES = {}
+
+def send_telegram_alert(text):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    data = urllib.parse.urlencode(payload).encode('utf-8')
+    try:
+        req = urllib.request.Request(url, data=data)
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        print(f"[-] Failed to dispatch Telegram alert: {e}")
+
+def compute_ja4_segment_a(proto, tls_ver, port, num_ciphers, num_exts, alpn):
+    """
+    Format Segment A: 
+    1. Protocol (t for TCP, q for QUIC) -> char 1
+    2. TLS Version (e.g. 13 for 1.3) -> chars 2-3
+    3. Destination Port (d if 443, o if other) -> char 4
+    4. Num Ciphers (2 chars, padded with 0, max 99) -> chars 5-6
+    5. Num Extensions (2 chars, padded with 0, max 99) -> chars 7-8
+    6. ALPN (2 chars, dynamic index: e.g. h2 -> h2, none -> 00) -> chars 9-10
+    """
+    p = 't' if proto == 'tcp' else 'q'
+    v = tls_ver if len(str(tls_ver)) == 2 else '13'
+    dp = 'd' if port == 443 else 'o'
+    nc = f"{min(num_ciphers, 99):02d}"
+    ne = f"{min(num_exts, 99):02d}"
+    
+    # Simple ALPN representation
+    alpn_val = '00'
+    if alpn:
+        if 'h2' in alpn: alpn_val = 'h2'
+        elif 'http/1.1' in alpn: alpn_val = 'h1'
+        else: alpn_val = alpn[:2]
+        
+    return f"{p}{v}{dp}{nc}{ne}{alpn_val}"
+
+def compute_truncated_sha256(values_list):
+    if not values_list:
+        return "000000000000"
+    # Sort values, filter grease codes if any, and hash
+    sorted_str = ",".join(sorted(values_list))
+    hasher = hashlib.sha256(sorted_str.encode('utf-8'))
+    return hasher.hexdigest()[:12]
+
+def parse_tls_client_hello(raw_payload):
+    # Extract ciphers and extensions from raw binary SSL/TLS client hello payload
+    # Exclude GREASE bytes: (val & 0x0f0f == 0x0a0a) or similar checks
+    # return lists of ciphers and extensions
+    ciphers = []
+    extensions = []
+    sni = ""
+    # Handshake payload parsing logic goes here...
+    return ciphers, extensions, sni
+
+def process_packet(packet):
+    if not packet.haslayer(TCP) or not packet.haslayer(Raw):
+        return
+    
+    raw_payload = bytes(packet[Raw].load)
+    # Filter for TLS Client Hello signature: 0x16 (Handshake), 0x03 (TLS version major)
+    if len(raw_payload) < 5 or raw_payload[0] != 0x16 or raw_payload[1] != 0x03:
+        return
+        
+    ip_layer = packet[IP]
+    tcp_layer = packet[TCP]
+    
+    ciphers, extensions, sni = parse_tls_client_hello(raw_payload)
+    
+    seg_a = compute_ja4_segment_a('tcp', '13', tcp_layer.dport, len(ciphers), len(extensions), "h2" if sni else "")
+    seg_b = compute_truncated_sha256(ciphers)
+    seg_c = compute_truncated_sha256(extensions)
+    
+    ja4_sig = f"{seg_a}_{seg_b}_{seg_c}"
+    
+    print(f"[*] Detected TLS handshake from {ip_layer.src}:{tcp_layer.sport} to {ip_layer.dst}:{tcp_layer.dport} (SNI: {sni})")
+    print(f"    JA4: {ja4_sig}")
+    
+    # Match locally or synchronize with server database
+    match_found = False
+    threat_info = None
+    
+    # If signature is known:
+    # alert_msg = f"🚨 *JA4 Threat Intrusion Warning!*\nHost: {ip_layer.src} ➝ {ip_layer.dst}\nMalware Model: {threat_info}\nFingerprint: `{ja4_sig}`"
+    # send_telegram_alert(alert_msg)
+
+if __name__ == "__main__":
+    print("[+] Starting JA4 TLS Intrusion Detection Daemon Sniffer...")
+    print("[+] Hooked into Telegram Alert channel ID: " + str(TELEGRAM_CHAT_ID))
+    sniff(prn=process_packet, filter="tcp port 443", store=0)
+```
+
+---
+
+## 6. INSTRUCTIONS FOR IMPLEMENTATION
+Ensure your code is clean, fully commented, and structurally modular. Integrate robust exception handling. 
+1. Use **Flask-SQLAlchemy** for database integration.
+2. Initialize database schemas on application startup, seeding standard signatures (Cobalt Strike: `t13d1516_8da0_94ef`, Tor Browser: `t13d1515_8da0_94ef`, safe Chrome: `t13d1516_2b3a_5c7a`).
+3. Make sure the HTML dashboard is complete, dynamic, interactive, and fits the aesthetic of a military-grade security platform.
+4. **NO TYPESCRIPT ALLOWED**: Do not generate any `.ts` or `.tsx` files, and do not compile any client-side components with Vite or other transpilation pipelines. Write direct, native, modern ES6+ Vanilla JavaScript inside script blocks or pure `.js` static assets.
+
